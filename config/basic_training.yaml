@@ -1,0 +1,73 @@
+# Basic training configuration without optional dependencies
+model:
+  name: "distilgpt2"  # Much smaller and faster model
+  trust_remote_code: false
+
+# No quantization for basic setup
+quantization:
+  load_in_4bit: false
+  load_in_8bit: false
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.1
+  target_modules: ["c_attn", "c_proj"]
+
+training:
+  output_dir: "./checkpoints"
+  num_train_epochs: 1  # Reduce to 1 epoch for testing
+  per_device_train_batch_size: 2  # Smaller batch size
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 1
+  learning_rate: 0.0005  # Changed from 5e-4 to avoid string parsing issues
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  lr_scheduler_type: "linear"
+  optim: "adamw_torch"
+  max_grad_norm: 1.0
+  warmup_steps: 10
+  logging_steps: 5
+  save_steps: 100
+  eval_steps: 100
+  eval_strategy: "steps"
+  save_strategy: "steps"
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+  fp16: false
+  dataloader_num_workers: 0
+  dataloader_pin_memory: false
+  remove_unused_columns: false
+
+experiment:
+  use_wandb: false  # Disable W&B
+  project_name: "contract-auditor"
+  run_name: "basic-training"
+  tags: ["baseline", "no-wandb"]
+
+data:
+  train_file: "data/processed/training_examples.jsonl"
+  cache_dir: "data/cache"
+
+dataset:
+  max_length: 512
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+
+tasks:
+  classification:
+    weight: 1.0
+    num_classes: 10
+  severity:
+    weight: 0.5
+  generation:
+    weight: 0.8
+    max_length: 256
+
+system:
+  mixed_precision: "none"  # Options: "fp16", "bf16", "none"
+  dataloader_num_workers: 0
+  disable_tqdm: false
+  report_to: "none"  # Disable reporting since we don't have wandb

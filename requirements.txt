@@ -1,0 +1,57 @@
+# Python dependencies for Contract AI Auditor
+
+# Core ML/AI libraries
+torch>=2.0.0
+transformers>=4.30.0
+datasets>=2.14.0
+tokenizers>=0.13.0
+accelerate>=0.21.0
+peft>=0.4.0  # For LoRA/QLoRA
+bitsandbytes>=0.41.0  # For quantization
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
+jsonlines>=4.0.0
+PyYAML>=6.0
+
+# Web3 and Solidity tools
+web3>=5.0.0  # More compatible version range
+py-solc-x>=1.12.0  # Compatible with Python 3.12
+slither-analyzer>=0.9.0
+
+# Blockchain testing frameworks
+# foundry-rs is not available via pip - install Foundry separately using:
+# curl -L https://foundry.paradigm.xyz | bash && foundryup
+# brownie-eth has compatibility issues with Python 3.12 - install manually if needed
+
+# Evaluation and metrics
+rouge-score>=0.1.2
+# bleu>=0.4.4  # May have compatibility issues
+seqeval>=1.2.2
+
+# Visualization and monitoring
+matplotlib>=3.5.0  # More compatible version
+seaborn>=0.11.0   # More compatible version
+# wandb>=0.15.0     # Optional - install separately if needed
+tensorboard>=2.10.0
+
+# Development tools
+pytest>=7.4.0
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.5.0
+pre-commit>=3.3.0
+
+# Utilities
+tqdm>=4.65.0
+click>=8.1.0
+python-dotenv>=1.0.0
+httpx>=0.24.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+
+# Optional: For faster training
+flash-attn>=2.0.0  # GPU-specific, may need manual installation
+apex  # NVIDIA Apex for mixed precision, install from source if needed

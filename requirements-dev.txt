@@ -1,0 +1,20 @@
+# Development dependencies
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.5.0
+pre-commit>=3.3.0
+bandit>=1.7.0  # Security linting
+safety>=2.3.0  # Dependency security scanning
+
+# Documentation
+sphinx>=7.0.0
+sphinx-rtd-theme>=1.3.0
+myst-parser>=2.0.0
+
+# Jupyter for development and analysis
+jupyter>=1.0.0
+ipykernel>=6.25.0
+notebook>=7.0.0

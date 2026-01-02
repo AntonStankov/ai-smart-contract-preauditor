@@ -1,0 +1,83 @@
+# Base configuration for CodeLLaMA 7B model
+model:
+  name: "codellama/CodeLlama-7b-hf"  
+  type: "causal_lm"
+  use_flash_attention: true
+  gradient_checkpointing: true
+
+# LoRA configuration for efficient fine-tuning  
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.1
+  target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  use_rslora: true
+  
+# Quantization settings
+quantization:
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_use_double_quant: true
+  bnb_4bit_quant_type: "nf4"
+
+# Training hyperparameters
+training:
+  output_dir: "training/models/codellama-7b-solidity-auditor"
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  num_train_epochs: 5
+  learning_rate: 2e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  lr_scheduler_type: "cosine"
+  
+  # Optimization
+  optim: "paged_adamw_8bit"
+  max_grad_norm: 1.0
+  dataloader_pin_memory: false
+  
+  # Evaluation and logging
+  evaluation_strategy: "steps"
+  eval_steps: 500
+  save_strategy: "steps"  
+  save_steps: 1000
+  logging_steps: 50
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+
+# Data settings  
+data:
+  max_length: 2048
+  train_file: "data/splits/train.jsonl"
+  validation_file: "data/splits/validation.jsonl"
+  test_file: "data/splits/test.jsonl"
+
+# Multi-task learning weights
+tasks:
+  vulnerability_classification:
+    weight: 1.0
+    loss_type: "binary_cross_entropy"
+  severity_regression:
+    weight: 0.5  
+    loss_type: "mse"
+  fix_generation:
+    weight: 0.8
+    loss_type: "cross_entropy"
+  explanation_generation:
+    weight: 0.6
+    loss_type: "cross_entropy"
+
+# Monitoring and experiment tracking
+experiment:
+  project_name: "contract-ai-auditor"
+  run_name: "codellama-7b-baseline"
+  tags: ["solidity", "security", "audit", "codellama"]
+  use_wandb: true
+  
+# Hardware settings
+system:
+  mixed_precision: "bf16"
+  dataloader_num_workers: 4
+  disable_tqdm: false
+  report_to: ["wandb", "tensorboard"]

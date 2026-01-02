@@ -1,0 +1,81 @@
+# Configuration for Phi-3 Mini model (smaller, efficient)
+model:
+  name: "microsoft/Phi-3-mini-4k-instruct"
+  type: "causal_lm" 
+  use_flash_attention: true
+  gradient_checkpointing: false  # Phi-3 is small enough
+  trust_remote_code: true
+
+# LoRA configuration
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.1
+  target_modules: ["qkv_proj", "o_proj", "gate_up_proj", "down_proj"]
+  use_rslora: false
+  
+# No quantization needed for small model
+quantization:
+  load_in_4bit: false
+
+# Training hyperparameters
+training:
+  output_dir: "training/models/phi3-mini-solidity-auditor"
+  per_device_train_batch_size: 16
+  per_device_eval_batch_size: 32
+  gradient_accumulation_steps: 1
+  num_train_epochs: 12
+  learning_rate: 5e-4
+  weight_decay: 0.02
+  warmup_ratio: 0.15
+  lr_scheduler_type: "polynomial"
+  
+  # Optimization
+  optim: "adamw_torch"
+  max_grad_norm: 1.0
+  dataloader_pin_memory: true
+  
+  # Evaluation and logging
+  evaluation_strategy: "steps"
+  eval_steps: 100
+  save_strategy: "steps"
+  save_steps: 200
+  logging_steps: 20
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_combined_score"
+
+# Data settings
+data:
+  max_length: 512  # Phi-3 mini has 4k context but we use shorter for efficiency
+  train_file: "data/splits/train.jsonl"
+  validation_file: "data/splits/validation.jsonl"
+  test_file: "data/splits/test.jsonl"
+
+# Multi-task learning weights  
+tasks:
+  vulnerability_classification:
+    weight: 1.5  # Emphasize classification for small model
+    loss_type: "focal_loss"
+  severity_regression:
+    weight: 0.3  # De-emphasize regression
+    loss_type: "smooth_l1"
+  fix_generation:
+    weight: 0.5  # Limited generation capability
+    loss_type: "cross_entropy"
+  explanation_generation:
+    weight: 0.2  # Minimal explanation generation
+    loss_type: "cross_entropy"
+
+# Monitoring and experiment tracking
+experiment:
+  project_name: "contract-ai-auditor"
+  run_name: "phi3-mini-baseline"
+  tags: ["solidity", "security", "audit", "phi3", "lightweight"]
+  use_wandb: true
+  
+# Hardware settings
+system:
+  mixed_precision: "fp16"
+  dataloader_num_workers: 12
+  disable_tqdm: false
+  report_to: ["wandb"]

@@ -1,0 +1,80 @@
+# Configuration for StarCoder2 3B model  
+model:
+  name: "bigcode/starcoder2-3b"
+  type: "causal_lm"
+  use_flash_attention: true
+  gradient_checkpointing: true
+
+# LoRA configuration
+lora:
+  r: 32
+  alpha: 64
+  dropout: 0.05
+  target_modules: ["c_proj", "c_attn", "w1", "w2"]
+  use_rslora: true
+  
+# Quantization settings  
+quantization:
+  load_in_8bit: true
+  
+# Training hyperparameters
+training:
+  output_dir: "training/models/starcoder2-3b-solidity-auditor"
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 16
+  gradient_accumulation_steps: 2
+  num_train_epochs: 8
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  lr_scheduler_type: "linear"
+  
+  # Optimization
+  optim: "adamw_torch"
+  max_grad_norm: 0.5
+  dataloader_pin_memory: true
+  
+  # Evaluation and logging
+  evaluation_strategy: "steps"
+  eval_steps: 250
+  save_strategy: "steps"
+  save_steps: 500
+  logging_steps: 25
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_f1_macro"
+
+# Data settings
+data:
+  max_length: 1024
+  train_file: "data/splits/train.jsonl"
+  validation_file: "data/splits/validation.jsonl" 
+  test_file: "data/splits/test.jsonl"
+
+# Multi-task learning weights
+tasks:
+  vulnerability_classification:
+    weight: 1.2
+    loss_type: "focal_loss"  # Better for imbalanced classes
+  severity_regression:
+    weight: 0.4
+    loss_type: "huber"
+  fix_generation:
+    weight: 1.0  
+    loss_type: "label_smoothing_cross_entropy"
+  explanation_generation:
+    weight: 0.5
+    loss_type: "cross_entropy"
+
+# Monitoring and experiment tracking
+experiment:
+  project_name: "contract-ai-auditor"
+  run_name: "starcoder2-3b-baseline"
+  tags: ["solidity", "security", "audit", "starcoder2"]
+  use_wandb: true
+  
+# Hardware settings
+system:
+  mixed_precision: "fp16" 
+  dataloader_num_workers: 8
+  disable_tqdm: false
+  report_to: ["wandb"]
