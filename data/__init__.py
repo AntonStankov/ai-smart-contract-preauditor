@@ -25,6 +25,19 @@ from .collectors import (
     DamnVulnerableDeFiCollector
 )
 
+# Internet-based data collectors
+try:
+    from .internet_collectors import (
+        InternetTrainingDataCollector,
+        GitHubContractCollector,
+        EtherscanContractCollector,
+        EnhancedSWCCollector,
+        create_internet_config
+    )
+    HAS_INTERNET_COLLECTORS = True
+except ImportError:
+    HAS_INTERNET_COLLECTORS = False
+
 __all__ = [
     # Schema classes
     "VulnerabilityType",
@@ -49,3 +62,13 @@ __all__ = [
     "SlitherCorpusCollector",
     "DamnVulnerableDeFiCollector"
 ]
+
+# Add internet collectors if available
+if HAS_INTERNET_COLLECTORS:
+    __all__.extend([
+        "InternetTrainingDataCollector",
+        "GitHubContractCollector", 
+        "EtherscanContractCollector",
+        "EnhancedSWCCollector",
+        "create_internet_config"
+    ])

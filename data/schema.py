@@ -55,6 +55,7 @@ class VulnerabilityImpact(Enum):
     PRIVACY = "privacy_breach"
     GAS_GRIEF = "gas_griefing"
     CODE_QUALITY = "code_quality"
+    PRIVILEGE_ESCALATION = "privilege_escalation"
 
 
 @dataclass

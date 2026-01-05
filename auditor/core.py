@@ -14,11 +14,14 @@ from datetime import datetime
 
 try:
     import torch
+    import torch.nn.functional as F
     from transformers import AutoTokenizer, AutoModelForCausalLM
     from peft import PeftModel
     torch_available = True
 except ImportError:
     torch_available = False
+    torch = None
+    F = None
 
 from data.schema import (
     VulnerabilityType, SeverityLevel, VulnerabilityImpact,
@@ -162,7 +165,29 @@ class ContractAuditor:
         
         # Run inference
         with torch.no_grad():
-            outputs = self.model(**inputs, output_hidden_states=True)
+            # Check if model is a MultiTaskAuditModel or has forward method that returns dict
+            try:
+                outputs = self.model(**inputs)
+                # If outputs is a dict (from MultiTaskAuditModel), use it directly
+                # Otherwise, wrap it
+                if not isinstance(outputs, dict):
+                    # Try to get hidden states if available
+                    if hasattr(outputs, 'hidden_states'):
+                        outputs = {
+                            'base_logits': outputs.logits if hasattr(outputs, 'logits') else None,
+                            'hidden_states': outputs.hidden_states
+                        }
+                    else:
+                        # Fallback: create dict with available outputs
+                        outputs = {'base_logits': outputs.logits if hasattr(outputs, 'logits') else None}
+            except Exception as e:
+                logger.warning(f"Model forward pass failed: {e}, using fallback")
+                # Fallback: just get logits
+                outputs = self.model(**inputs)
+                if hasattr(outputs, 'logits'):
+                    outputs = {'base_logits': outputs.logits}
+                else:
+                    outputs = {}
         
         # Extract vulnerability predictions
         vulnerabilities = self._extract_vulnerabilities(
@@ -261,13 +286,84 @@ class ContractAuditor:
         contract_code: str,
         contract_name: str
     ) -> List[Vulnerability]:
-        """Extract vulnerability predictions from model outputs."""
+        """Extract vulnerability predictions from model outputs using neural network."""
         vulnerabilities = []
         
-        # For now, implement a placeholder vulnerability detection
-        # In a real implementation, this would use the model's multi-task outputs
+        # Check if model has multi-task outputs (trained model)
+        if hasattr(model_outputs, 'vulnerability_logits') or isinstance(model_outputs, dict):
+            # Use neural network model predictions
+            if isinstance(model_outputs, dict):
+                vuln_logits = model_outputs.get('vulnerability_logits')
+                severity_preds = model_outputs.get('severity_predictions')
+                detection_logits = model_outputs.get('detection_logits')
+            else:
+                vuln_logits = model_outputs.vulnerability_logits
+                severity_preds = model_outputs.severity_predictions
+                detection_logits = model_outputs.detection_logits
+            
+            # Check if contract is vulnerable
+            if detection_logits is not None:
+                if F is None:
+                    import torch.nn.functional as F
+                detection_prob = torch.sigmoid(detection_logits.squeeze())
+                if detection_prob.item() < self.confidence_threshold:
+                    # Model says contract is not vulnerable
+                    return []
+            
+            # Extract vulnerability predictions from logits
+            if vuln_logits is not None:
+                if F is None:
+                    import torch.nn.functional as F
+                vuln_probs = torch.sigmoid(vuln_logits.squeeze())
+                
+                # Get predicted vulnerability types
+                predicted_indices = (vuln_probs > self.confidence_threshold).nonzero(as_tuple=True)[0]
+                
+                for idx in predicted_indices:
+                    vuln_type = self.idx_to_vuln.get(idx.item())
+                    if vuln_type is None:
+                        continue
+                    
+                    confidence = vuln_probs[idx].item()
+                    
+                    # Get severity prediction
+                    if severity_preds is not None:
+                        severity_score = severity_preds.squeeze()[idx].item()
+                        severity = self._score_to_severity(severity_score)
+                    else:
+                        severity = self._estimate_severity(vuln_type, contract_code)
+                    
+                    # Find location in code
+                    location = self._find_vulnerability_location_in_code(contract_code, vuln_type)
+                    
+                    vulnerability = Vulnerability(
+                        vulnerability_type=vuln_type,
+                        severity=severity,
+                        impact=self._determine_impact(vuln_type),
+                        location=location,
+                        affected_code=self._extract_affected_code(contract_code, location),
+                        title=self._get_vulnerability_title(vuln_type),
+                        description=self._get_vulnerability_description(vuln_type),
+                        root_cause=self._get_root_cause(vuln_type),
+                        recommended_fix=self._get_recommended_fix(vuln_type),
+                        confidence=confidence
+                    )
+                    vulnerabilities.append(vulnerability)
+            
+            return vulnerabilities
         
-        # Simple pattern-based detection as fallback
+        # Fallback: If model doesn't have expected outputs, use pattern matching
+        # This handles cases where model structure is different or model isn't fully trained
+        logger.warning("Model outputs don't match expected format, using pattern matching fallback")
+        return self._extract_vulnerabilities_pattern_based(contract_code, contract_name)
+    
+    def _extract_vulnerabilities_pattern_based(
+        self,
+        contract_code: str,
+        contract_name: str
+    ) -> List[Vulnerability]:
+        """Pattern-based fallback vulnerability detection."""
+        vulnerabilities = []
         patterns = {
             VulnerabilityType.REENTRANCY: [
                 r'\.call\{value:.*\}\(\)',
@@ -296,13 +392,12 @@ class ContractAuditor:
         }
         
         lines = contract_code.split('\n')
+        import re
         
         for vuln_type, pattern_list in patterns.items():
-            import re
             for pattern in pattern_list:
                 for line_num, line in enumerate(lines, 1):
                     if re.search(pattern, line, re.IGNORECASE):
-                        # Create vulnerability
                         vulnerability = Vulnerability(
                             vulnerability_type=vuln_type,
                             severity=self._estimate_severity(vuln_type, line),
@@ -317,11 +412,60 @@ class ContractAuditor:
                             description=self._get_vulnerability_description(vuln_type),
                             root_cause=self._get_root_cause(vuln_type),
                             recommended_fix=self._get_recommended_fix(vuln_type),
-                            confidence=0.8  # Placeholder confidence
+                            confidence=0.6  # Lower confidence for pattern matching
                         )
                         vulnerabilities.append(vulnerability)
         
         return vulnerabilities
+    
+    def _score_to_severity(self, score: float) -> SeverityLevel:
+        """Convert severity score (0.0-1.0) to SeverityLevel."""
+        if score >= 0.9:
+            return SeverityLevel.CRITICAL
+        elif score >= 0.7:
+            return SeverityLevel.HIGH
+        elif score >= 0.5:
+            return SeverityLevel.MEDIUM
+        elif score >= 0.3:
+            return SeverityLevel.LOW
+        else:
+            return SeverityLevel.INFO
+    
+    def _find_vulnerability_location_in_code(
+        self,
+        contract_code: str,
+        vuln_type: VulnerabilityType
+    ) -> VulnerabilityLocation:
+        """Find approximate location of vulnerability in code."""
+        lines = contract_code.split('\n')
+        import re
+        
+        # Pattern hints for each vulnerability type
+        patterns = {
+            VulnerabilityType.REENTRANCY: [r'\.call\{value:', r'\.call\(', r'\.transfer\('],
+            VulnerabilityType.TX_ORIGIN: [r'tx\.origin'],
+            VulnerabilityType.TIMESTAMP_DEPENDENCE: [r'block\.timestamp', r'\bnow\b'],
+            VulnerabilityType.UNCHECKED_CALL: [r'\.call\(', r'\.delegatecall\('],
+        }
+        
+        for pattern in patterns.get(vuln_type, []):
+            for line_num, line in enumerate(lines, 1):
+                if re.search(pattern, line, re.IGNORECASE):
+                    return VulnerabilityLocation(
+                        line_start=line_num,
+                        line_end=line_num,
+                        contract_name="Contract"
+                    )
+        
+        # Default to first line if not found
+        return VulnerabilityLocation(line_start=1, line_end=1, contract_name="Contract")
+    
+    def _extract_affected_code(self, contract_code: str, location: VulnerabilityLocation) -> str:
+        """Extract affected code snippet around vulnerability location."""
+        lines = contract_code.split('\n')
+        start = max(0, location.line_start - 2)
+        end = min(len(lines), location.line_end + 2)
+        return '\n'.join(lines[start:end])
     
     def _estimate_severity(self, vuln_type: VulnerabilityType, code_line: str) -> SeverityLevel:
         """Estimate severity based on vulnerability type and context."""

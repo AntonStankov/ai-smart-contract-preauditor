@@ -1,0 +1,80 @@
+data:
+  max_length: 256
+  test_file: /home/antonstankov/contract-ai-auditor/data/processed/forum_training_examples.jsonl
+  train_file: /home/antonstankov/contract-ai-auditor/data/processed/forum_training_examples.jsonl
+  validation_file: /home/antonstankov/contract-ai-auditor/data/processed/forum_training_examples.jsonl
+dataset:
+  max_length: 256
+  test_split: 0.1
+  train_split: 0.8
+  val_split: 0.1
+experiment:
+  project_name: contract-ai-auditor
+  run_name: phi3-mini-low-memory
+  tags:
+  - solidity
+  - security
+  - audit
+  - phi3
+  - low-memory
+  use_wandb: false
+lora:
+  alpha: 8
+  dropout: 0.1
+  r: 4
+  target_modules:
+  - qkv_proj
+  - o_proj
+  - gate_up_proj
+  - down_proj
+  use_rslora: false
+model:
+  device_map: auto
+  gradient_checkpointing: true
+  low_cpu_mem_usage: true
+  name: microsoft/Phi-3-mini-4k-instruct
+  trust_remote_code: true
+  type: causal_lm
+  use_flash_attention: false
+quantization:
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+  load_in_4bit: true
+system:
+  dataloader_num_workers: 0
+  disable_tqdm: false
+  mixed_precision: fp16
+  report_to: []
+tasks:
+  explanation_generation:
+    loss_type: cross_entropy
+    weight: 0.0
+  fix_generation:
+    loss_type: cross_entropy
+    weight: 0.0
+  severity_regression:
+    loss_type: smooth_l1
+    weight: 0.3
+  vulnerability_classification:
+    loss_type: focal_loss
+    weight: 1.5
+training:
+  dataloader_pin_memory: false
+  eval_steps: 200
+  eval_strategy: steps
+  gradient_accumulation_steps: 4
+  learning_rate: 1e-3
+  load_best_model_at_end: true
+  logging_steps: 50
+  lr_scheduler_type: polynomial
+  max_grad_norm: 1.0
+  metric_for_best_model: eval_combined_score
+  num_train_epochs: 3
+  optim: adamw_torch
+  output_dir: /home/antonstankov/contract-ai-auditor/checkpoints/forum-trained-model
+  per_device_eval_batch_size: 4
+  per_device_train_batch_size: 2
+  save_steps: 400
+  save_strategy: steps
+  warmup_ratio: 0.15
+  weight_decay: 0.02

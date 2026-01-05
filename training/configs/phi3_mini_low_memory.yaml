@@ -1,0 +1,95 @@
+# Low-Memory Configuration for Phi-3 Mini (prevents freezing)
+# Use this if your computer freezes when loading the model
+
+model:
+  name: "microsoft/Phi-3-mini-4k-instruct"
+  type: "causal_lm" 
+  use_flash_attention: false  # Disable to save memory
+  gradient_checkpointing: true  # Enable to save memory
+  trust_remote_code: true
+  device_map: "auto"  # Automatically manage device placement
+  low_cpu_mem_usage: true  # Load model more efficiently
+
+# LoRA configuration (reduces memory)
+lora:
+  r: 4  # Reduced from 8 to save memory
+  alpha: 8  # Reduced from 16
+  dropout: 0.1
+  target_modules: ["qkv_proj", "o_proj", "gate_up_proj", "down_proj"]
+  use_rslora: false
+  
+# Enable quantization to reduce memory usage
+quantization:
+  load_in_4bit: true  # Use 4-bit quantization (reduces memory by ~75%)
+  bnb_4bit_use_double_quant: true
+  bnb_4bit_quant_type: "nf4"
+
+# Training hyperparameters (reduced for memory)
+training:
+  output_dir: "checkpoints/forum-trained-model"
+  per_device_train_batch_size: 2  # Reduced from 16
+  per_device_eval_batch_size: 4  # Reduced from 32
+  gradient_accumulation_steps: 4  # Increased to maintain effective batch size
+  num_train_epochs: 3
+  learning_rate: 1e-3
+  weight_decay: 0.02
+  warmup_ratio: 0.15
+  lr_scheduler_type: "polynomial"
+  
+  # Optimization
+  optim: "adamw_torch"
+  max_grad_norm: 1.0
+  dataloader_pin_memory: false  # Disable to save memory
+  
+  # Evaluation and logging
+  eval_strategy: "steps"  # Fixed: use eval_strategy not evaluation_strategy
+  eval_steps: 200  # Less frequent evaluation
+  save_strategy: "steps"
+  save_steps: 400  # Must be multiple of eval_steps (200) for load_best_model_at_end
+  logging_steps: 50
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_combined_score"
+
+# Data settings
+data:
+  max_length: 256  # Reduced from 512 to save memory
+  train_file: "data/processed/forum_training_examples.jsonl"
+  validation_file: "data/processed/forum_training_examples.jsonl"
+  test_file: "data/processed/forum_training_examples.jsonl"
+
+# Dataset split
+dataset:
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  max_length: 256
+
+# Multi-task learning weights  
+tasks:
+  vulnerability_classification:
+    weight: 1.5
+    loss_type: "focal_loss"
+  severity_regression:
+    weight: 0.3
+    loss_type: "smooth_l1"
+  fix_generation:
+    weight: 0.0  # Disable to save memory
+    loss_type: "cross_entropy"
+  explanation_generation:
+    weight: 0.0  # Disable to save memory
+    loss_type: "cross_entropy"
+
+# Monitoring and experiment tracking
+experiment:
+  project_name: "contract-ai-auditor"
+  run_name: "phi3-mini-low-memory"
+  tags: ["solidity", "security", "audit", "phi3", "low-memory"]
+  use_wandb: false
+  
+# Hardware settings
+system:
+  mixed_precision: "fp16"  # Use fp16 to save memory
+  dataloader_num_workers: 0  # Set to 0 to avoid memory issues
+  disable_tqdm: false
+  report_to: []
+

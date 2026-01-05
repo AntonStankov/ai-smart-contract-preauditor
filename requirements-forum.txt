@@ -1,0 +1,15 @@
+# Additional requirements for forum and web search data collection
+
+# Web scraping and parsing
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Web search
+duckduckgo-search>=3.9.0
+
+# Already in requirements.txt but listed here for reference:
+# requests>=2.31.0
+# web3>=6.0.0
+
+
+

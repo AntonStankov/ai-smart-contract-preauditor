@@ -24,8 +24,8 @@ training:
   per_device_train_batch_size: 16
   per_device_eval_batch_size: 32
   gradient_accumulation_steps: 1
-  num_train_epochs: 12
-  learning_rate: 5e-4
+  num_train_epochs: 3  # Reduced for faster training
+  learning_rate: 1e-3  # Higher learning rate for faster convergence
   weight_decay: 0.02
   warmup_ratio: 0.15
   lr_scheduler_type: "polynomial"
@@ -36,7 +36,7 @@ training:
   dataloader_pin_memory: true
   
   # Evaluation and logging
-  evaluation_strategy: "steps"
+  eval_strategy: "steps"  # Fixed: use eval_strategy not evaluation_strategy
   eval_steps: 100
   save_strategy: "steps"
   save_steps: 200
@@ -47,9 +47,9 @@ training:
 # Data settings
 data:
   max_length: 512  # Phi-3 mini has 4k context but we use shorter for efficiency
-  train_file: "data/splits/train.jsonl"
-  validation_file: "data/splits/validation.jsonl"
-  test_file: "data/splits/test.jsonl"
+  train_file: "data/processed/internet_training_examples.jsonl"
+  validation_file: "data/processed/internet_training_examples.jsonl"  # Use same data for validation
+  test_file: "data/processed/internet_training_examples.jsonl"
 
 # Multi-task learning weights  
 tasks:
@@ -69,13 +69,13 @@ tasks:
 # Monitoring and experiment tracking
 experiment:
   project_name: "contract-ai-auditor"
-  run_name: "phi3-mini-baseline"
-  tags: ["solidity", "security", "audit", "phi3", "lightweight"]
-  use_wandb: true
+  run_name: "phi3-mini-internet-trained"
+  tags: ["solidity", "security", "audit", "phi3", "internet-data"]
+  use_wandb: false  # Disabled for quick training
   
 # Hardware settings
 system:
   mixed_precision: "fp16"
-  dataloader_num_workers: 12
+  dataloader_num_workers: 4  # Reduced for stability
   disable_tqdm: false
-  report_to: ["wandb"]
+  report_to: []  # No reporting

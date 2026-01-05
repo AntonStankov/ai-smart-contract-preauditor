@@ -3,39 +3,51 @@ pragma solidity ^0.8.20;
 
 interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
+    function balanceOf(address account) external view returns (uint256);
 }
 
-contract Vault {
-    IERC20 public immutable token;
+contract RewardDistributor {
+    IERC20 public immutable rewardToken;
+    address public owner;
 
-    mapping(address => uint256) private balances;
-    uint256 public totalDeposits;
+    mapping(address => uint256) public rewards;
+    address[] private participants;
 
-    constructor(IERC20 _token) {
-        token = _token;
+    modifier onlyOwner() {
+        require(msg.sender == owner, "not owner");
+        _;
     }
 
-    function deposit(uint256 amount) external {
-        require(amount > 0, "zero amount");
-        balances[msg.sender] += amount;
-        totalDeposits += amount;
+    constructor(IERC20 _rewardToken) {
+        rewardToken = _rewardToken;
+        owner = msg.sender;
     }
 
-    function withdraw(uint256 amount) external {
-        require(amount > 0, "zero amount");
-        require(balances[msg.sender] >= amount, "insufficient");
-
-        _beforeWithdraw(msg.sender, amount);
-
-        balances[msg.sender] -= amount;
-        totalDeposits -= amount;
+    function register(address user, uint256 reward) external onlyOwner {
+        if (rewards[user] == 0) {
+            participants.push(user);
+        }
+        rewards[user] += reward;
     }
 
-    function _beforeWithdraw(address user, uint256 amount) internal {
-        require(token.transfer(user, amount), "transfer failed");
+    function distribute() external onlyOwner {
+        uint256 balance = rewardToken.balanceOf(address(this));
+
+        for (uint256 i = 0; i < participants.length; i++) {
+            address user = participants[i];
+            uint256 amount = rewards[user];
+
+            if (amount == 0) continue;
+            if (balance < amount) break;
+
+            rewards[user] = 0;
+            rewardToken.transfer(user, amount);
+
+            balance -= amount;
+        }
     }
 
-    function balanceOf(address user) external view returns (uint256) {
-        return balances[user];
+    function participantCount() external view returns (uint256) {
+        return participants.length;
     }
 }

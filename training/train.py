@@ -156,26 +156,49 @@ class MultiTaskAuditModel(nn.Module):
         self.hidden_size = hidden_size
         self.num_vuln_types = num_vulnerability_types
         
-        # Task-specific heads
-        self.vulnerability_classifier = nn.Linear(hidden_size, num_vulnerability_types)
-        self.severity_regressor = nn.Linear(hidden_size, num_vulnerability_types)
-        self.vulnerability_detector = nn.Linear(hidden_size, 1)  # Binary: vulnerable or not
+        # Get the dtype and device from base model
+        base_dtype = next(self.base_model.parameters()).dtype
+        base_device = next(self.base_model.parameters()).device
+        
+        # Task-specific heads - match base model dtype and device
+        self.vulnerability_classifier = nn.Linear(hidden_size, num_vulnerability_types, dtype=base_dtype, device=base_device)
+        self.severity_regressor = nn.Linear(hidden_size, num_vulnerability_types, dtype=base_dtype, device=base_device)
+        self.vulnerability_detector = nn.Linear(hidden_size, 1, dtype=base_dtype, device=base_device)  # Binary: vulnerable or not
         
         # Dropout for regularization
         self.dropout = nn.Dropout(0.1)
         
     def forward(self, input_ids, attention_mask, **kwargs):
+        # Remove past_key_values and use_cache to avoid DynamicCache issues
+        forward_kwargs = {
+            'input_ids': input_ids,
+            'attention_mask': attention_mask,
+            'output_hidden_states': True,
+            'use_cache': False,  # Disable caching to avoid compatibility issues
+        }
+        
         # Get base model outputs
-        outputs = self.base_model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True
-        )
+        outputs = self.base_model(**forward_kwargs)
         
         # Use last hidden state for classification/regression
         last_hidden_state = outputs.hidden_states[-1]
-        pooled_output = last_hidden_state.mean(dim=1)  # Global average pooling
+        model_dtype = last_hidden_state.dtype
+        
+        # Global average pooling with attention mask consideration
+        if attention_mask is not None:
+            # Expand attention mask to match hidden state dimensions
+            expanded_mask = attention_mask.unsqueeze(-1).expand_as(last_hidden_state).to(dtype=model_dtype)
+            # Zero out padded positions
+            masked_hidden = last_hidden_state * expanded_mask
+            # Sum over sequence length, then divide by actual sequence length
+            pooled_output = masked_hidden.sum(dim=1) / expanded_mask.sum(dim=1).clamp(min=1)
+        else:
+            pooled_output = last_hidden_state.mean(dim=1)  # Global average pooling
+        
         pooled_output = self.dropout(pooled_output)
+        
+        # Ensure pooled output maintains dtype
+        pooled_output = pooled_output.to(dtype=model_dtype)
         
         # Task predictions
         vulnerability_logits = self.vulnerability_classifier(pooled_output)
@@ -203,17 +226,25 @@ class MultiTaskTrainer(Trainer):
         }
     
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        """Compute multi-task loss."""
+        """Compute multi-task loss with dtype consistency."""
+        # Get model dtype for consistency
+        model_dtype = next(model.parameters()).dtype
+        device = inputs['input_ids'].device
+        
+        # Ensure all input tensors are in correct dtype
+        for key, value in inputs.items():
+            if isinstance(value, torch.Tensor) and value.dtype.is_floating_point:
+                inputs[key] = value.to(dtype=model_dtype)
+        
         outputs = model(**inputs)
         
-        device = inputs['input_ids'].device
-        total_loss = torch.tensor(0.0, device=device)
+        total_loss = torch.tensor(0.0, dtype=model_dtype, device=device)
         
         # Vulnerability classification loss (multi-label binary cross-entropy)
         if 'vulnerability_labels' in inputs:
             vuln_loss = nn.BCEWithLogitsLoss()(
-                outputs['vulnerability_logits'],
-                inputs['vulnerability_labels']
+                outputs['vulnerability_logits'].to(dtype=model_dtype),
+                inputs['vulnerability_labels'].to(dtype=model_dtype)
             )
             total_loss += self.task_weights['vulnerability_classification'] * vuln_loss
         
@@ -223,16 +254,16 @@ class MultiTaskTrainer(Trainer):
             severity_mask = inputs['severity_scores'] > 0
             if severity_mask.any():
                 severity_loss = nn.MSELoss()(
-                    outputs['severity_predictions'][severity_mask],
-                    inputs['severity_scores'][severity_mask]
+                    outputs['severity_predictions'][severity_mask].to(dtype=model_dtype),
+                    inputs['severity_scores'][severity_mask].to(dtype=model_dtype)
                 )
                 total_loss += self.task_weights['severity_regression'] * severity_loss
         
         # Binary vulnerability detection loss
         if 'is_vulnerable' in inputs:
             detection_loss = nn.BCEWithLogitsLoss()(
-                outputs['detection_logits'].squeeze(),
-                inputs['is_vulnerable']
+                outputs['detection_logits'].squeeze().to(dtype=model_dtype),
+                inputs['is_vulnerable'].to(dtype=model_dtype)
             )
             total_loss += self.task_weights['detection'] * detection_loss
         
@@ -240,7 +271,7 @@ class MultiTaskTrainer(Trainer):
         if 'fix_input_ids' in inputs and outputs['base_logits'] is not None:
             # Shift labels for causal LM
             shift_labels = inputs['fix_input_ids'][..., 1:].contiguous()
-            shift_logits = outputs['base_logits'][..., :-1, :].contiguous()
+            shift_logits = outputs['base_logits'][..., :-1, :].contiguous().to(dtype=model_dtype)
             
             gen_loss = nn.CrossEntropyLoss()(
                 shift_logits.view(-1, shift_logits.size(-1)),
@@ -351,10 +382,17 @@ def create_model_and_tokenizer(config: Dict) -> Tuple[nn.Module, SolidityDataset
     # Load tokenizer
     tokenizer = SolidityDatasetTokenizer(model_name)
     
-    # Load base model
+    # Load base model with memory optimizations
     model_kwargs = {
-        'trust_remote_code': config['model'].get('trust_remote_code', False)
+        'trust_remote_code': config['model'].get('trust_remote_code', False),
+        'low_cpu_mem_usage': config['model'].get('low_cpu_mem_usage', True),
+        'use_cache': False,  # Fix for DynamicCache compatibility issue
+        'attn_implementation': 'eager',  # Use eager attention to avoid cache issues
     }
+    
+    # Add device_map for automatic memory management
+    if config['model'].get('device_map'):
+        model_kwargs['device_map'] = config['model']['device_map']
     
     # Add quantization config if specified
     if config.get('quantization', {}).get('load_in_4bit'):
@@ -367,17 +405,38 @@ def create_model_and_tokenizer(config: Dict) -> Tuple[nn.Module, SolidityDataset
                 bnb_4bit_quant_type=config['quantization'].get('bnb_4bit_quant_type', 'nf4')
             )
             model_kwargs['quantization_config'] = quantization_config
+            logger.info("Using 4-bit quantization to reduce memory usage")
         except ImportError:
             logger.warning("BitsAndBytesConfig not available. Install with: pip install bitsandbytes")
             logger.warning("Falling back to fp16 loading")
             model_kwargs['torch_dtype'] = torch.float16
     elif config.get('quantization', {}).get('load_in_8bit'):
         model_kwargs['load_in_8bit'] = True
+        logger.info("Using 8-bit quantization to reduce memory usage")
     
-    base_model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
+    # Add torch dtype if not using quantization
+    if 'quantization_config' not in model_kwargs and 'load_in_8bit' not in model_kwargs:
+        model_kwargs['torch_dtype'] = torch.float16
+    
+    logger.info(f"Loading model {model_name}...")
+    logger.info("This may take a few minutes. Please wait...")
+    
+    try:
+        base_model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
+        logger.info("Model loaded successfully!")
+    except Exception as e:
+        logger.error(f"Failed to load model: {e}")
+        logger.error("Try using the low-memory config: training/configs/phi3_mini_low_memory.yaml")
+        raise
     
     # Resize token embeddings for special tokens
     base_model.resize_token_embeddings(tokenizer.get_vocab_size())
+    
+    # Apply gradient checkpointing if configured
+    if config['model'].get('gradient_checkpointing', False):
+        if hasattr(base_model, 'gradient_checkpointing_enable'):
+            base_model.gradient_checkpointing_enable()
+            logger.info("Gradient checkpointing enabled to save memory")
     
     # Apply LoRA if configured
     if 'lora' in config:
@@ -390,12 +449,17 @@ def create_model_and_tokenizer(config: Dict) -> Tuple[nn.Module, SolidityDataset
             use_rslora=config['lora'].get('use_rslora', False)
         )
         base_model = get_peft_model(base_model, lora_config)
+        logger.info(f"LoRA applied: r={config['lora']['r']}, alpha={config['lora']['alpha']}")
     
     # Wrap in multi-task model
     hidden_size = base_model.config.hidden_size
     num_vuln_types = len(VulnerabilityType)
     
     model = MultiTaskAuditModel(base_model, num_vuln_types, hidden_size)
+    
+    # Ensure entire model uses consistent dtype (should already be handled in MultiTaskAuditModel)
+    logger.info(f"Model dtype: {next(model.parameters()).dtype}")
+    logger.info(f"Model device: {next(model.parameters()).device}")
     
     return model, tokenizer
 
@@ -430,7 +494,7 @@ def create_datasets(config: Dict, tokenizer: SolidityDatasetTokenizer) -> Tuple[
         
         logger.info(f"Split {n_total} examples: {len(train_examples)} train, {len(val_examples)} val, {len(test_examples)} test")
     
-    max_length = config['dataset'].get('max_length', 512)
+    max_length = config.get('dataset', {}).get('max_length') or config.get('data', {}).get('max_length', 512)
     
     # Create datasets
     train_dataset = ContractAuditDataset(train_examples, tokenizer, max_length, include_fixes=False)
@@ -514,10 +578,10 @@ def main():
     
     # Extract task weights from config
     task_weights = {
-        'vulnerability_classification': config['tasks']['classification']['weight'],
-        'severity_regression': config['tasks']['severity']['weight'],
-        'detection': config['tasks']['classification']['weight'],  # Use classification weight for detection
-        'generation': config['tasks']['generation']['weight']
+        'vulnerability_classification': config['tasks']['vulnerability_classification']['weight'],
+        'severity_regression': config['tasks']['severity_regression']['weight'],
+        'detection': config['tasks']['vulnerability_classification']['weight'],  # Use classification weight for detection
+        'generation': config['tasks']['fix_generation']['weight']
     }
     
     # Create trainer

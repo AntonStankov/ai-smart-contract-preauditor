@@ -17,12 +17,28 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from data.collectors import DataCollector
 from data.schema import save_training_examples, DatasetProcessor
 
+# Try to import internet collectors
+try:
+    from data.internet_collectors import InternetTrainingDataCollector, create_internet_config
+    HAS_INTERNET_COLLECTORS = True
+except ImportError:
+    HAS_INTERNET_COLLECTORS = False
+    logger.warning("Internet collectors not available. Install requests library for internet data collection.")
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Try to import internet collectors
+try:
+    from data.internet_collectors import InternetTrainingDataCollector, create_internet_config
+    HAS_INTERNET_COLLECTORS = True
+except ImportError:
+    HAS_INTERNET_COLLECTORS = False
+    logger.warning("Internet collectors not available. Install requests library for internet data collection.")
 
 
 def main():
@@ -31,7 +47,8 @@ def main():
         "--sources", 
         nargs="+",
         default=["swc"],
-        choices=["swc", "ethernaut", "immunefi", "openzeppelin", "slither", "dvd", "all"],
+        choices=["swc", "ethernaut", "immunefi", "openzeppelin", "slither", "dvd", 
+                "github", "etherscan", "internet", "all"],
         help="Data sources to collect from"
     )
     parser.add_argument(
@@ -49,40 +66,110 @@ def main():
         default="data/cache",
         help="Cache directory for downloaded data"
     )
+    parser.add_argument(
+        "--internet-only",
+        action="store_true",
+        help="Only collect from internet sources"
+    )
+    parser.add_argument(
+        "--github-token",
+        help="GitHub personal access token for enhanced API limits"
+    )
+    parser.add_argument(
+        "--etherscan-key",
+        help="Etherscan API key for contract source code access"
+    )
+    parser.add_argument(
+        "--max-examples",
+        type=int,
+        default=5000,
+        help="Maximum number of examples to collect"
+    )
     
     args = parser.parse_args()
     
+    # Handle internet vs local sources
+    internet_sources = ["github", "etherscan"]
+    local_sources = ["swc", "ethernaut", "immunefi", "openzeppelin", "slither", "dvd"]
+    
+    if args.internet_only:
+        args.sources = internet_sources
+    elif "internet" in args.sources:
+        # Replace "internet" with actual internet sources
+        args.sources = [s for s in args.sources if s != "internet"] + internet_sources
+    elif "all" in args.sources:
+        args.sources = local_sources + internet_sources
+    
     # Expand 'all' to all available sources
     if "all" in args.sources:
-        args.sources = ["swc", "ethernaut", "immunefi", "openzeppelin", "slither", "dvd"]
+        args.sources = local_sources + (internet_sources if HAS_INTERNET_COLLECTORS else [])
     
     # Create output directories
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     Path(args.processed_dir).mkdir(parents=True, exist_ok=True)
     Path(args.cache_dir).mkdir(parents=True, exist_ok=True)
     
-    # Initialize collector
-    collector = DataCollector(output_dir=args.output_dir)
-    
+    # Initialize collectors
     logger.info(f"Starting data collection from sources: {args.sources}")
-    
     all_training_examples = []
     
-    for source in args.sources:
+    # Collect from local sources (existing behavior)
+    local_to_collect = [s for s in args.sources if s in local_sources]
+    if local_to_collect:
+        collector = DataCollector(output_dir=args.output_dir)
+        logger.info(f"Collecting from local sources: {local_to_collect}")
+        
+        for source_name in local_to_collect:
+            try:
+                logger.info(f"Collecting from {source_name}...")
+                audit_data = collector.collect_source(source_name)
+                
+                # Convert to training examples
+                for audit in audit_data:
+                    examples = DatasetProcessor.audit_to_training_examples(audit)
+                    all_training_examples.extend(examples)
+                
+                logger.info(f"Processed {len(audit_data)} audit records from {source_name}")
+                
+            except Exception as e:
+                logger.error(f"Failed to collect from {source_name}: {e}")
+                continue
+    
+    # Collect from internet sources (new functionality)  
+    internet_to_collect = [s for s in args.sources if s in internet_sources]
+    if internet_to_collect and HAS_INTERNET_COLLECTORS:
+        logger.info(f"Collecting from internet sources: {internet_to_collect}")
+        
+        # Create internet collector configuration
+        config = create_internet_config()
+        if args.github_token:
+            config['github']['token'] = args.github_token
+        if args.etherscan_key:
+            config['etherscan']['api_key'] = args.etherscan_key
+        
+        # Enable only requested sources
+        for source in ['github', 'etherscan', 'swc_enhanced']:
+            config[source]['enabled'] = source.replace('_enhanced', '') in internet_to_collect or 'swc' in internet_to_collect
+        
         try:
-            logger.info(f"Collecting from {source}...")
-            audit_data = collector.collect_source(source)
+            internet_collector = InternetTrainingDataCollector(config)
+            internet_data = internet_collector.collect_all_internet_data()
             
-            # Convert to training examples
-            for audit in audit_data:
-                examples = DatasetProcessor.audit_to_training_examples(audit)
-                all_training_examples.extend(examples)
-            
-            logger.info(f"Processed {len(audit_data)} audit records from {source}")
-            
+            for source_name, audit_data in internet_data.items():
+                if audit_data:
+                    for audit in audit_data:
+                        examples = DatasetProcessor.audit_to_training_examples(audit)
+                        all_training_examples.extend(examples)
+                    logger.info(f"Processed {len(audit_data)} audit records from {source_name}")
         except Exception as e:
-            logger.error(f"Failed to collect from {source}: {e}")
-            continue
+            logger.error(f"Failed to collect from internet sources: {e}")
+    elif internet_to_collect and not HAS_INTERNET_COLLECTORS:
+        logger.warning("Internet sources requested but internet collectors not available")
+    
+    # Limit total examples if specified
+    if len(all_training_examples) > args.max_examples:
+        logger.info(f"Limiting to {args.max_examples} examples (collected {len(all_training_examples)})")
+        all_training_examples = all_training_examples[:args.max_examples]
     
     if all_training_examples:
         # Save processed training examples
